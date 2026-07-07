@@ -1,6 +1,5 @@
 import os
 import logging
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -10,7 +9,7 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
-from googletrans import Translator, LANGUAGES
+from deep_translator import GoogleTranslator
 
 # ============ CONFIGURATION ============
 logging.basicConfig(
@@ -18,9 +17,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# Initialize translator
-translator = Translator()
 
 # ============ LANGUAGE DATA ============
 POPULAR_LANGUAGES = {
@@ -33,7 +29,7 @@ POPULAR_LANGUAGES = {
     'ru': '🇷🇺 Russian',
     'ja': '🇯🇵 Japanese',
     'ko': '🇰🇷 Korean',
-    'zh-cn': '🇨🇳 Chinese (Simplified)',
+    'zh-CN': '🇨🇳 Chinese (Simplified)',
     'ar': '🇸🇦 Arabic',
     'hi': '🇮🇳 Hindi',
     'bn': '🇧🇩 Bengali',
@@ -46,11 +42,38 @@ POPULAR_LANGUAGES = {
     'sw': '🇰🇪 Swahili'
 }
 
+# Language codes for deep-translator
+LANGUAGE_CODES = {
+    'en': 'english',
+    'es': 'spanish',
+    'fr': 'french',
+    'de': 'german',
+    'it': 'italian',
+    'pt': 'portuguese',
+    'ru': 'russian',
+    'ja': 'japanese',
+    'ko': 'korean',
+    'zh-CN': 'chinese (simplified)',
+    'ar': 'arabic',
+    'hi': 'hindi',
+    'bn': 'bengali',
+    'ur': 'urdu',
+    'id': 'indonesian',
+    'ms': 'malay',
+    'tl': 'filipino',
+    'vi': 'vietnamese',
+    'th': 'thai',
+    'sw': 'swahili'
+}
+
 # ============ COMMAND HANDLERS ============
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command - Show welcome message"""
+    """Handle /start command"""
     user = update.effective_user
+    current_lang = context.user_data.get('target_lang', 'en')
+    current_name = POPULAR_LANGUAGES.get(current_lang, 'English')
+    
     welcome_text = (
         f"👋 *Hello {user.first_name}!*\n\n"
         "🌍 *Welcome to Language Translator Bot*\n\n"
@@ -61,7 +84,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/languages` - See all supported languages\n"
         "• `/help` - Get detailed help\n\n"
         "💡 *Just send me any text* and I'll translate it!\n"
-        f"📍 Current target language: *{get_language_name(context)}*"
+        f"📍 Current target language: *{current_name}*"
     )
     
     keyboard = [
@@ -99,7 +122,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /lang command - Show language selection"""
+    """Handle /lang command"""
     keyboard = []
     row = []
     
@@ -111,9 +134,7 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if row:
         keyboard.append(row)
     
-    # Add a button to see all languages
     keyboard.append([InlineKeyboardButton("📖 All Languages", callback_data='list_lang')])
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     current_lang = context.user_data.get('target_lang', 'en')
@@ -138,30 +159,14 @@ async def detect_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def list_languages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /languages command"""
-    # Get all languages from googletrans
-    all_langs = []
-    for code, name in LANGUAGES.items():
-        all_langs.append(f"• `{code}` - {name.title()}")
-    
-    # Split into chunks
-    chunks = []
-    chunk = []
-    for lang in all_langs:
-        chunk.append(lang)
-        if len(chunk) >= 25:
-            chunks.append('\n'.join(chunk))
-            chunk = []
-    if chunk:
-        chunks.append('\n'.join(chunk))
+    lang_list = []
+    for code, name in POPULAR_LANGUAGES.items():
+        lang_list.append(f"• {name} (`{code}`)")
     
     await update.message.reply_text(
-        f"📖 *Supported Languages ({len(LANGUAGES)})*\n\n{chunks[0]}",
+        f"📖 *Popular Languages ({len(POPULAR_LANGUAGES)})*\n\n{chr(10).join(lang_list)}",
         parse_mode='Markdown'
     )
-    
-    # Send remaining chunks
-    for chunk in chunks[1:]:
-        await update.message.reply_text(chunk, parse_mode='Markdown')
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /cancel command"""
@@ -171,13 +176,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("ℹ️ Nothing to cancel.")
 
-# ============ HELPER FUNCTIONS ============
-
-def get_language_name(context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Get the name of the user's current target language"""
-    lang_code = context.user_data.get('target_lang', 'en')
-    return POPULAR_LANGUAGES.get(lang_code, 'English')
-
 # ============ CALLBACK HANDLERS ============
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,9 +184,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     data = query.data
-    user_id = update.effective_user.id
     
-    # ===== CHANGE LANGUAGE =====
     if data == 'change_lang':
         keyboard = []
         row = []
@@ -208,7 +204,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
     
-    # ===== DETECT LANGUAGE =====
     elif data == 'detect_lang':
         context.user_data['detect_mode'] = True
         await query.edit_message_text(
@@ -216,21 +211,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Send me any text and I'll detect its language."
         )
     
-    # ===== LIST LANGUAGES =====
     elif data == 'list_lang':
         lang_list = []
-        # Show popular languages first
         for code, name in list(POPULAR_LANGUAGES.items())[:20]:
             lang_list.append(f"• {name} (`{code}`)")
-        lang_list.append("\n...and 80+ more languages!")
+        lang_list.append("\n...and more languages available via /languages")
         
         await query.edit_message_text(
-            f"📖 *Popular Languages*\n\n{chr(10).join(lang_list)}\n\n"
-            "Use /languages to see the complete list.",
+            f"📖 *Popular Languages*\n\n{chr(10).join(lang_list)}",
             parse_mode='Markdown'
         )
     
-    # ===== HELP MENU =====
     elif data == 'help_menu':
         help_text = (
             "🆘 *Help Guide*\n\n"
@@ -242,7 +233,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.edit_message_text(help_text, parse_mode='Markdown')
     
-    # ===== SET LANGUAGE =====
     elif data.startswith('lang_'):
         lang_code = data.replace('lang_', '')
         context.user_data['target_lang'] = lang_code
@@ -259,29 +249,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming text messages"""
-    user_id = update.effective_user.id
     text = update.message.text
     
     # ===== DETECTION MODE =====
     if context.user_data.get('detect_mode'):
         try:
-            detection = translator.detect(text)
-            confidence = detection.confidence * 100
-            lang_name = LANGUAGES.get(detection.lang, detection.lang).title()
+            # Use deep-translator's built-in detection
+            detector = GoogleTranslator(source='auto', target='en')
+            detected = detector.detect(text)
             
-            # Get a sample of the text
+            lang_name = POPULAR_LANGUAGES.get(detected, detected)
+            
             sample = text[:200] + ('...' if len(text) > 200 else '')
             
             await update.message.reply_text(
                 f"🔍 *Detection Result*\n\n"
                 f"📝 Language: *{lang_name}*\n"
-                f"🔖 Code: `{detection.lang}`\n"
-                f"📊 Confidence: {confidence:.1f}%\n\n"
+                f"🔖 Code: `{detected}`\n\n"
                 f"📄 Text:\n\"{sample}\""
             )
             context.user_data['detect_mode'] = False
         except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}")
+            await update.message.reply_text(f"❌ Error detecting language: {str(e)}")
             context.user_data['detect_mode'] = False
         return
     
@@ -292,21 +281,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Show typing indicator
         await update.message.chat.send_action(action="typing")
         
-        # Translate
-        translation = translator.translate(text, dest=target_lang)
+        # Translate using deep-translator
+        translator = GoogleTranslator(source='auto', target=target_lang)
+        translated = translator.translate(text)
         
-        # Get language names
-        src_name = LANGUAGES.get(translation.src, translation.src).title()
-        tgt_name = LANGUAGES.get(target_lang, target_lang).title()
+        # Get language name for display
+        target_name = POPULAR_LANGUAGES.get(target_lang, target_lang)
         
-        # Prepare response (limited to 4096 characters)
+        # Prepare response
         original = text[:500] + ('...' if len(text) > 500 else '')
-        translated = translation.text[:500]
+        translated_text = translated[:500]
         
         response = (
             f"🌍 *Translation Complete*\n\n"
-            f"📝 *Original* ({src_name}):\n{original}\n\n"
-            f"✅ *Translated* ({tgt_name}):\n{translated}"
+            f"📝 *Original:*\n{original}\n\n"
+            f"✅ *Translated* ({target_name}):\n{translated_text}"
         )
         
         await update.message.reply_text(response, parse_mode='Markdown')
@@ -324,26 +313,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Log errors"""
     logger.error(f"Update {update} caused error: {context.error}")
-    if update and update.effective_message:
-        await update.effective_message.reply_text(
-            "⚠️ Something went wrong. Please try again later."
-        )
 
 # ============ MAIN FUNCTION ============
 
 def main():
     """Start the bot"""
-    # Get token from environment
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     
     if not token:
         logger.error("❌ TELEGRAM_BOT_TOKEN environment variable not set!")
-        logger.error("Please add it in Railway dashboard → Variables tab")
         return
     
     logger.info("🚀 Starting Language Translator Bot...")
     
-    # Build application
     application = Application.builder().token(token).build()
     
     # Add command handlers
@@ -353,20 +335,13 @@ def main():
     application.add_handler(CommandHandler("detect", detect_language))
     application.add_handler(CommandHandler("languages", list_languages))
     application.add_handler(CommandHandler("cancel", cancel))
-    
-    # Add callback handler
     application.add_handler(CallbackQueryHandler(button_callback))
-    
-    # Add message handler (catch all text messages)
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
-    
-    # Add error handler
     application.add_error_handler(error_handler)
     
-    # Start bot with polling
-    logger.info("✅ Bot is running and waiting for messages...")
+    logger.info("✅ Bot is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
